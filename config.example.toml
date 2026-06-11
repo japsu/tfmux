@@ -1,0 +1,23 @@
+# tfmux configuration — copy to ~/.config/tfmux/config.toml
+# (or $XDG_CONFIG_HOME/tfmux/config.toml)
+
+# Directories scanned for git repos containing Terraform root modules.
+roots = ["~/work/iac"]
+
+# Max concurrent terraform subprocesses. Plans of different workspaces of the
+# SAME module are always serialized regardless of this setting.
+parallelism = 4
+
+# Terraform binary. tfenv shims work (commands run in the module directory,
+# so per-directory .terraform-version files resolve). Set "tofu" for OpenTofu.
+terraform_bin = "terraform"
+
+# Name of the tmux session applies run in (`tmux attach -t <this>`).
+tmux_session = "tfmux"
+
+# Saved plan files older than this are deleted (they contain secrets).
+plan_ttl = "24h"
+
+# Per-repo overrides, keyed by repo path.
+#[repos."~/work/iac/legacy-repo"]
+#terraform_bin = "terraform-0.13"

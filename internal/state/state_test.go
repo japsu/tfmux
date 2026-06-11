@@ -92,6 +92,27 @@ func TestExpirePlans(t *testing.T) {
 	}
 }
 
+func TestGC(t *testing.T) {
+	s := New(t.TempDir())
+	alive := t.TempDir() // exists on disk
+	dead := filepath.Join(t.TempDir(), "gone")
+	for _, p := range []string{alive, dead} {
+		if _, err := s.ModuleDir(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pruned, err := s.GC()
+	if err != nil || pruned != 1 {
+		t.Fatalf("pruned %d, err %v", pruned, err)
+	}
+	if _, err := s.LoadRun(alive, "w"); err != nil {
+		t.Errorf("alive module state damaged: %v", err)
+	}
+	if dirs, _ := filepath.Glob(filepath.Join(s.Dir, "modules", "*")); len(dirs) != 1 {
+		t.Errorf("module dirs after GC = %d, want 1", len(dirs))
+	}
+}
+
 func TestIgnoreRoundTrip(t *testing.T) {
 	s := New(t.TempDir())
 	ig, err := s.LoadIgnore()

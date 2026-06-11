@@ -151,6 +151,7 @@ func discardPlanCmd(store *state.Store, modulePath, workspace string) tea.Cmd {
 func expirePlansCmd(store *state.Store, ttl time.Duration) tea.Cmd {
 	return func() tea.Msg {
 		n, _ := store.ExpirePlans(ttl)
+		_, _ = store.GC()
 		return expiredPlansMsg{n: n}
 	}
 }

@@ -214,6 +214,34 @@ func (s *Store) ExpirePlans(ttl time.Duration) (int, error) {
 	return removed, nil
 }
 
+// GC removes state for modules whose directory no longer exists on disk
+// (deleted repos, moved modules). Returns the number of pruned module dirs.
+func (s *Store) GC() (int, error) {
+	matches, err := filepath.Glob(filepath.Join(s.Dir, "modules", "*", "module.json"))
+	if err != nil {
+		return 0, err
+	}
+	pruned := 0
+	for _, ref := range matches {
+		data, err := os.ReadFile(ref)
+		if err != nil {
+			continue
+		}
+		var meta struct {
+			Path string `json:"path"`
+		}
+		if json.Unmarshal(data, &meta) != nil || meta.Path == "" {
+			continue
+		}
+		if _, err := os.Stat(meta.Path); errors.Is(err, os.ErrNotExist) {
+			if os.RemoveAll(filepath.Dir(ref)) == nil {
+				pruned++
+			}
+		}
+	}
+	return pruned, nil
+}
+
 // --- ignore list ---
 
 // Ignore is a persisted set of ignored item keys: repo paths, module paths,
