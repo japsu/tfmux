@@ -72,15 +72,16 @@ type Model struct {
 	showIgnored bool
 	discovering bool
 
-	focus       focusArea
-	detail      viewport.Model
-	detailKey   string
-	filter      textinput.Model
-	filterText  string
-	spinner     spinner.Model
-	help        help.Model
-	showHelp    bool
-	confirmQuit bool
+	focus        focusArea
+	detail       viewport.Model
+	detailKey    string
+	detailFollow string // workspace key whose live plan log is being tailed
+	filter       textinput.Model
+	filterText   string
+	spinner      spinner.Model
+	help         help.Model
+	showHelp     bool
+	confirmQuit  bool
 
 	taskCursor  int    // selection in the task pane
 	confirmKill string // task id awaiting kill confirmation (running apply)
@@ -184,14 +185,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case planLogMsg:
-		if msg.err != nil {
-			m.status = "no plan log: " + msg.err.Error()
+		return m.updatePlanLog(msg)
+
+	case logFollowMsg:
+		// keep tailing only while the user is still viewing this live log
+		if m.detailFollow != msg.key || m.focus != focusDetail {
 			return m, nil
 		}
-		m.detailKey = msg.key
-		m.detail.SetContent(colorizePlanLog(msg.content))
-		m.detail.GotoTop()
-		m.focus = focusDetail
+		if mp, ws, ok := splitWSKey(msg.key); ok {
+			return m, loadPlanLogCmd(m.store, mp, ws)
+		}
 		return m, nil
 
 	case expiredPlansMsg:
@@ -424,6 +427,60 @@ func (m *Model) applyDone(ev runner.Event) tea.Cmd {
 	return saveRunCmd(m.store, rec)
 }
 
+// --- plan log viewer / live follow ---
+
+// splitWSKey splits a workspace key (modulePath + "//" + workspace).
+func splitWSKey(key string) (modulePath, workspace string, ok bool) {
+	if i := strings.LastIndex(key, "//"); i >= 0 {
+		return key[:i], key[i+2:], true
+	}
+	return "", "", false
+}
+
+// updatePlanLog shows a plan log in the detail viewport. While the plan is
+// still in flight (m.detailFollow set) it tails the file: re-reads on a tick,
+// auto-scrolling to the bottom unless the user has scrolled up.
+func (m *Model) updatePlanLog(msg planLogMsg) (tea.Model, tea.Cmd) {
+	following := m.detailFollow == msg.key
+	m.focus = focusDetail
+
+	if msg.err != nil {
+		// A just-started plan may not have written its log yet — keep waiting.
+		if following {
+			if m.detailKey != msg.key {
+				m.detail.SetContent(styleDim.Render("  waiting for output…"))
+				m.detailKey = msg.key
+			}
+			if m.hasTask(runner.KindPlan, msg.key) {
+				return m, logFollowTick(msg.key)
+			}
+			m.detailFollow = ""
+			return m, nil
+		}
+		m.focus = focusTree
+		m.status = "no plan log: " + msg.err.Error()
+		return m, nil
+	}
+
+	firstOpen := m.detailKey != msg.key
+	atBottom := m.detail.AtBottom()
+	m.detailKey = msg.key
+	m.detail.SetContent(colorizePlanLog(msg.content))
+
+	if !following {
+		m.detail.GotoTop()
+		return m, nil
+	}
+	if firstOpen || atBottom {
+		m.detail.GotoBottom() // tail -f: stick to the end unless the user scrolled up
+	}
+	if m.hasTask(runner.KindPlan, msg.key) {
+		return m, logFollowTick(msg.key)
+	}
+	m.detailFollow = "" // plan finished; this was the final read
+	return m, nil
+}
+
 // --- keyboard handling ---
 
 func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -473,6 +530,7 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.Esc), key.Matches(msg, keys.Quit):
 			m.focus = focusTree
 			m.detailKey = ""
+			m.detailFollow = ""
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -544,6 +602,13 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if r, ok := m.currentRow(); ok {
 			switch {
 			case r.kind == rowWorkspace:
+				// Follow live if a plan is in flight; otherwise show the last
+				// completed log statically.
+				m.detailFollow = ""
+				if m.hasTask(runner.KindPlan, r.ws.Key()) {
+					m.detailFollow = r.ws.Key()
+					m.detailKey = "" // force GotoBottom on the first follow read
+				}
 				return m, loadPlanLogCmd(m.store, r.mod.Path, r.ws.Name)
 			case r.kind == rowModule && r.mod.WorkspaceState == domain.WorkspacesError:
 				m.detailKey = r.mod.Path

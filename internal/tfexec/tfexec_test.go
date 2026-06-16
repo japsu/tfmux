@@ -142,6 +142,22 @@ func TestVersion(t *testing.T) {
 	}
 }
 
+func TestOutTeesLiveOutput(t *testing.T) {
+	tf, _ := newTF(t)
+	var live strings.Builder
+	tf.Out = &live
+	v, err := tf.Version(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v != "1.9.9" {
+		t.Errorf("version = %q", v)
+	}
+	if !strings.Contains(live.String(), "terraform_version") {
+		t.Errorf("Out did not receive the live output: %q", live.String())
+	}
+}
+
 func TestRunMissingBinary(t *testing.T) {
 	tf := TF{Bin: "/nonexistent/terraform", Dir: t.TempDir()}
 	if _, err := tf.Version(context.Background()); err == nil {

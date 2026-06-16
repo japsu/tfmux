@@ -101,6 +101,13 @@ func fingerprintCmd(m *domain.Module) tea.Cmd {
 	}
 }
 
+// logFollowMsg ticks the live tail of a running plan's log.
+type logFollowMsg struct{ key string }
+
+func logFollowTick(key string) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return logFollowMsg{key: key} })
+}
+
 func loadPlanLogCmd(store *state.Store, modulePath, workspace string) tea.Cmd {
 	key := modulePath + "//" + workspace
 	return func() tea.Msg {

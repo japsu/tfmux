@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,9 +33,14 @@ import (
 
 // TF runs terraform commands in one module directory.
 type TF struct {
-	Bin string // terraform binary (name on PATH or absolute)
-	Dir string // module directory (cmd.Dir, so tfenv shims resolve locally)
+	Bin string   // terraform binary (name on PATH or absolute)
+	Dir string   // module directory (cmd.Dir, so tfenv shims resolve locally)
 	Env []string // extra env entries appended to os.Environ()
+
+	// Out, when set, receives the command's combined output as it is produced
+	// (in addition to the buffered Result.Output), so callers can stream a
+	// live log. Writes happen from the command's I/O goroutine.
+	Out io.Writer
 }
 
 // Result is the outcome of one terraform invocation.
@@ -55,8 +61,12 @@ func (t TF) run(ctx context.Context, workspace string, args ...string) (Result, 
 		cmd.Env = append(cmd.Env, "TF_WORKSPACE="+workspace)
 	}
 	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	var sink io.Writer = &buf
+	if t.Out != nil {
+		sink = io.MultiWriter(&buf, t.Out) // tee live output to the caller
+	}
+	cmd.Stdout = sink
+	cmd.Stderr = sink
 	cmd.Cancel = func() error {
 		return cmd.Process.Signal(syscall.SIGINT)
 	}

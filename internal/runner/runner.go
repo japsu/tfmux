@@ -492,10 +492,23 @@ func (r *Runner) plan(ctx context.Context, tf tfexec.TF, m *domain.Module, works
 		PlanStarted: time.Now(),
 	}
 
-	res, err := tf.Plan(ctx, workspace, planFile)
+	// Stream the plan's output to the log file as it runs, so the UI can
+	// follow it live. The file is truncated up front (so a stale log never
+	// shows) and exists the moment the task starts. A separate TF carries the
+	// tee so the show/version enrichment calls below don't pollute the log.
+	planTF := tf
+	logPath, logErr := r.store.PlanLogPath(m.Path, workspace)
+	if logErr == nil {
+		if logFile, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600); ferr == nil {
+			planTF.Out = logFile
+			defer logFile.Close()
+		}
+	}
+
+	res, err := planTF.Plan(ctx, workspace, planFile)
 	rec.PlanFinished = time.Now()
-	if logPath, lerr := r.store.PlanLogPath(m.Path, workspace); lerr == nil {
-		_ = os.WriteFile(logPath, res.Output, 0o600)
+	if planTF.Out == nil && logErr == nil {
+		_ = os.WriteFile(logPath, res.Output, 0o600) // fallback if streaming setup failed
 	}
 	if err != nil {
 		return nil, err
