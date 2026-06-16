@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/japsu/tfmux/internal/runner"
+	"github.com/japsu/tfmux/internal/state"
 	"github.com/japsu/tfmux/internal/tmuxctl"
 )
 
@@ -96,6 +97,67 @@ func TestKillRunningApplyNeedsConfirm(t *testing.T) {
 	}
 	if len(killed) != 1 || killed[0] != "@1" {
 		t.Errorf("kill-window not invoked on the window: %v", killed)
+	}
+}
+
+// liveApplyWindow attaches for a running or failed apply, but not a clean or
+// aborted one.
+func TestLiveApplyWindow(t *testing.T) {
+	m, mod := fixtureModel(t)
+	enumerated(t, m, mod, "prod")
+	key := mod.Path + "//prod"
+
+	if _, ok := m.liveApplyWindow(key); ok {
+		t.Error("no apply → no window")
+	}
+
+	runningApplyTask(m, key, "@1")
+	if w, ok := m.liveApplyWindow(key); !ok || w != "@1" {
+		t.Errorf("running apply: got %q %v", w, ok)
+	}
+	delete(m.tasks, runner.TaskID(runner.KindApply, key))
+
+	zero := 0
+	m.runs[key] = &state.RunRecord{
+		ModulePath: mod.Path, Workspace: "prod",
+		Apply: &state.ApplyRecord{WindowID: "@2", ExitCode: &zero},
+	}
+	if _, ok := m.liveApplyWindow(key); ok {
+		t.Error("clean apply → no live window")
+	}
+
+	one := 1
+	m.runs[key].Apply.ExitCode = &one
+	if w, ok := m.liveApplyWindow(key); !ok || w != "@2" {
+		t.Errorf("failed apply: got %q %v", w, ok)
+	}
+
+	m.runs[key].Apply.Aborted = true
+	if _, ok := m.liveApplyWindow(key); ok {
+		t.Error("aborted apply → no live window")
+	}
+}
+
+// enter on a workspace with a running apply attaches (tmux) rather than
+// opening the plan log.
+func TestEnterAttachesToRunningApply(t *testing.T) {
+	m, mod := fixtureModel(t)
+	enumerated(t, m, mod, "prod")
+	key := mod.Path + "//prod"
+	m.tmuxOK = true
+	m.tmux = tmuxctl.NewWithRunner("sess", func(args ...string) ([]byte, error) { return nil, nil })
+	runningApplyTask(m, key, "@1")
+	m.cursor = 2 // workspace row
+
+	cmd := keyPress(m, "enter")
+	if cmd == nil {
+		t.Fatal("enter on a running apply should produce an attach command")
+	}
+	if m.detailFollow != "" {
+		t.Error("attaching must not start log follow")
+	}
+	if m.focus == focusDetail {
+		t.Error("attaching must not open the log viewer")
 	}
 }
 

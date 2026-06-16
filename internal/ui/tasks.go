@@ -54,10 +54,26 @@ func (m *Model) updateTaskKey(msg tea.KeyMsg) tea.Cmd {
 		if m.taskCursor < len(m.tasks)-1 {
 			m.taskCursor++
 		}
+	case key.Matches(msg, keys.View):
+		return m.viewSelectedTask()
 	case key.Matches(msg, keys.Cancel):
 		m.cancelSelectedTask()
 	case key.Matches(msg, keys.CancelAll):
 		m.cancelQueuedTasks()
+	}
+	return nil
+}
+
+// viewSelectedTask runs the unified view/attach action on the selected task's
+// workspace (plans and applies). Enumerate/init have no log to show.
+func (m *Model) viewSelectedTask() tea.Cmd {
+	tasks := m.sortedTasks()
+	if m.taskCursor < 0 || m.taskCursor >= len(tasks) {
+		return nil
+	}
+	ts := tasks[m.taskCursor]
+	if ts.kind == runner.KindPlan || ts.kind == runner.KindApply {
+		return m.viewOrAttach(ts.key)
 	}
 	return nil
 }
@@ -160,7 +176,7 @@ func (m *Model) renderTaskPane(height int) string {
 		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
-	b.WriteString(styleHelpLine.Render("  x cancel/kill · X cancel all queued · esc/T close"))
+	b.WriteString(styleHelpLine.Render("  enter view/attach · x cancel/kill · X cancel all queued · esc/T close"))
 	return b.String()
 }
 
@@ -174,7 +190,7 @@ func (m *Model) renderTaskLine(ts *taskState, selected bool, width int) string {
 	line := fmt.Sprintf("  %s  %s  %s", badge, styleModule.Render(fmt.Sprintf("%-9s", ts.kind.String())), m.taskLabel(ts))
 	line += "  " + styleDim.Render(humanDur(ts.started))
 	if ts.kind == runner.KindApply && ts.running {
-		line += styleDim.Render("  (t: attach)")
+		line += styleDim.Render("  (enter: attach)")
 	}
 	if selected {
 		plain := ansi.Strip(line)

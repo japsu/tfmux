@@ -324,7 +324,7 @@ func (m *Model) taskRunning(ev runner.Event, ts *taskState) tea.Cmd {
 			ts.windowID = ev.WindowID
 			if rec := m.runs[ev.Key]; rec != nil {
 				rec.Apply = &state.ApplyRecord{Started: time.Now(), WindowID: ev.WindowID}
-				m.status = "apply launched in tmux — press t to attach"
+				m.status = "apply launched in tmux — press enter to attach"
 				return saveRunCmd(m.store, rec)
 			}
 		}
@@ -422,7 +422,7 @@ func (m *Model) applyDone(ev runner.Event) tea.Cmd {
 			m.status = fmt.Sprintf("applied %s//%s ✓", rec.ModulePath, rec.Workspace)
 			return tea.Batch(saveRunCmd(m.store, rec), discardPlanCmd(m.store, rec.ModulePath, rec.Workspace))
 		}
-		m.status = fmt.Sprintf("apply failed (exit %d) — press t to inspect the tmux window", *ev.ApplyExit)
+		m.status = fmt.Sprintf("apply failed (exit %d) — press enter to inspect the tmux window", *ev.ApplyExit)
 	}
 	return saveRunCmd(m.store, rec)
 }
@@ -602,14 +602,7 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if r, ok := m.currentRow(); ok {
 			switch {
 			case r.kind == rowWorkspace:
-				// Follow live if a plan is in flight; otherwise show the last
-				// completed log statically.
-				m.detailFollow = ""
-				if m.hasTask(runner.KindPlan, r.ws.Key()) {
-					m.detailFollow = r.ws.Key()
-					m.detailKey = "" // force GotoBottom on the first follow read
-				}
-				return m, loadPlanLogCmd(m.store, r.mod.Path, r.ws.Name)
+				return m, m.viewOrAttach(r.ws.Key())
 			case r.kind == rowModule && r.mod.WorkspaceState == domain.WorkspacesError:
 				m.detailKey = r.mod.Path
 				m.detail.SetContent(colorizePlanLog(r.mod.WorkspaceErr))
@@ -643,8 +636,6 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, discoverCmd(m.cfg.Roots, true)
 	case key.Matches(msg, keys.Apply):
 		return m, m.applyCurrent()
-	case key.Matches(msg, keys.Attach):
-		return m, m.attach()
 	case key.Matches(msg, keys.Tasks):
 		m.focus = focusTasks
 		m.taskCursor = 0
@@ -946,7 +937,7 @@ func (m *Model) applyCurrent() tea.Cmd {
 		m.status = "plan file expired or discarded — re-plan first"
 		return nil
 	case m.hasTask(runner.KindApply, key):
-		m.status = "apply already queued/running — press t to attach"
+		m.status = "apply already queued/running — press enter to attach"
 		return nil
 	case m.isStale(rec):
 		m.status = "plan is STALE (module changed since plan) — re-plan, or attach and apply manually"
@@ -961,16 +952,45 @@ func (m *Model) applyCurrent() tea.Cmd {
 	return nil
 }
 
-func (m *Model) attach() tea.Cmd {
+// liveApplyWindow returns the tmux window to attach to for a workspace, when
+// one is worth attaching to: an apply running now, or a failed apply whose
+// window the wrapper kept open for inspection. A clean/aborted apply has no
+// live window.
+func (m *Model) liveApplyWindow(key string) (string, bool) {
+	if ts := m.task(runner.KindApply, key); ts != nil && ts.windowID != "" {
+		return ts.windowID, true
+	}
+	if rec := m.runs[key]; rec != nil && rec.Apply != nil && !rec.Apply.Aborted && rec.Apply.WindowID != "" {
+		if rec.Apply.ExitCode != nil && *rec.Apply.ExitCode != 0 {
+			return rec.Apply.WindowID, true
+		}
+	}
+	return "", false
+}
+
+// viewOrAttach is the unified "show me what's happening" action for a
+// workspace: attach to its live apply window if there is one, otherwise open
+// (and, while a plan runs, follow) its plan log.
+func (m *Model) viewOrAttach(key string) tea.Cmd {
+	if win, ok := m.liveApplyWindow(key); ok {
+		return m.attachWindow(win)
+	}
+	mp, ws, ok := splitWSKey(key)
+	if !ok {
+		return nil
+	}
+	m.detailFollow = ""
+	if m.hasTask(runner.KindPlan, key) {
+		m.detailFollow = key
+		m.detailKey = "" // force GotoBottom on the first follow read
+	}
+	return loadPlanLogCmd(m.store, mp, ws)
+}
+
+func (m *Model) attachWindow(windowID string) tea.Cmd {
 	if !m.tmuxOK {
 		m.status = "tmux not found — install it: brew install tmux"
 		return nil
-	}
-	windowID := ""
-	if r, ok := m.currentRow(); ok && r.kind == rowWorkspace {
-		if rec := m.runs[r.ws.Key()]; rec != nil && rec.Apply != nil {
-			windowID = rec.Apply.WindowID
-		}
 	}
 	return tea.ExecProcess(m.tmux.AttachCmd(windowID), func(err error) tea.Msg {
 		if err != nil {

@@ -64,9 +64,8 @@ Run `tfmux` for the TUI, or `tfmux ls [--json]` for a scriptable dump.
 | `p` / `P` | plan marked-or-cursor / plan all visible |
 | `x` | cancel/kill task (queued → dropped; running → SIGINT; running apply → confirm, then kill its tmux window) |
 | `T` | task pane: all in-flight tasks; `x` cancel/kill, `X` cancel all queued |
-| `enter` | view plan output — follows live while the plan runs, static once done |
+| `enter` | see what's happening: attach to a live apply (tmux; detach with `C-b d`), else view the plan log — following it live while the plan runs |
 | `A` | apply saved plan in tmux |
-| `t` | attach to the tmux session (detach with `C-b d` to return) |
 | `d` | discard saved plan file |
 | `i` / `Z` | toggle ignore / show ignored |
 | `I` | `terraform init -upgrade` for the module |
@@ -93,10 +92,13 @@ Run `tfmux` for the TUI, or `tfmux ls [--json]` for a scriptable dump.
   completion; an apply left running when tfmux exits is re-adopted on restart.
   Canceling (`x`) a *queued* apply drops it before launch; a *running* apply is
   left attached in tmux.
-- **Live plan logs.** A plan streams its output to a log file as it runs, so
-  `enter` on a running plan tails it in real time (auto-scrolling unless you
-  scroll up); on a finished plan it shows the captured log. Applies you follow
-  by attaching to their tmux window (`t`) instead.
+- **One key to "see what's happening" (`enter`).** Following a non-attachable
+  task and attaching to an attachable one are the same intent, so `enter`
+  unifies them: on a workspace with a live apply it attaches to that apply's
+  tmux window; otherwise it opens the plan log — and a plan streams its output
+  to a log file as it runs, so `enter` on a running plan tails it in real time
+  (auto-scrolling unless you scroll up), while a finished plan shows the
+  captured log.
 - **`TF_WORKSPACE`, never `workspace select`** — selecting would mutate
   `.terraform/environment` shared with your shell and other jobs.
 - **Workspace lists are cached.** Enumerating workspaces hits the backend
