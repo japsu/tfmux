@@ -33,8 +33,10 @@ import (
 // PhaseRunning event, and removed on any terminal event.
 type taskState struct {
 	kind     runner.Kind
+	key      string // module path (enumerate/init) or workspace key (plan/apply)
 	running  bool   // false: queued waiting for a slot; true: executing
 	windowID string // apply: the tmux window to attach to
+	started  time.Time
 }
 
 type focusArea int
@@ -43,6 +45,7 @@ const (
 	focusTree focusArea = iota
 	focusDetail
 	focusFilter
+	focusTasks
 )
 
 // Model is the root Bubble Tea model.
@@ -78,6 +81,9 @@ type Model struct {
 	help        help.Model
 	showHelp    bool
 	confirmQuit bool
+
+	taskCursor  int    // selection in the task pane
+	confirmKill string // task id awaiting kill confirmation (running apply)
 
 	status string
 	width  int
@@ -268,7 +274,7 @@ func (m *Model) findModule(path string) *domain.Module {
 // --- task store ---
 
 func (m *Model) addTask(kind runner.Kind, key string) {
-	m.tasks[runner.TaskID(kind, key)] = &taskState{kind: kind}
+	m.tasks[runner.TaskID(kind, key)] = &taskState{kind: kind, key: key, started: time.Now()}
 }
 
 func (m *Model) task(kind runner.Kind, key string) *taskState {
@@ -296,7 +302,7 @@ func (m *Model) updateRunnerEvent(ev runner.Event) tea.Cmd {
 	if ev.Phase == runner.PhaseRunning {
 		ts := m.tasks[id]
 		if ts == nil {
-			ts = &taskState{kind: ev.Kind}
+			ts = &taskState{kind: ev.Kind, key: ev.Key, started: time.Now()}
 			m.tasks[id] = ts
 		}
 		ts.running = true
@@ -431,6 +437,19 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	if m.confirmKill != "" {
+		switch msg.String() {
+		case "y", "Y", "enter":
+			m.killTask(m.confirmKill)
+			m.confirmKill = ""
+		default:
+			m.confirmKill = ""
+		}
+		return m, nil
+	}
+	if m.focus == focusTasks {
+		return m, m.updateTaskKey(msg)
+	}
 	if m.focus == focusFilter {
 		switch {
 		case key.Matches(msg, keys.Esc):
@@ -561,6 +580,9 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.applyCurrent()
 	case key.Matches(msg, keys.Attach):
 		return m, m.attach()
+	case key.Matches(msg, keys.Tasks):
+		m.focus = focusTasks
+		m.taskCursor = 0
 	}
 	return m, nil
 }
@@ -931,6 +953,8 @@ func (m *Model) View() string {
 	var body string
 	if m.showHelp {
 		body = m.help.FullHelpView(keys.FullHelp())
+	} else if m.focus == focusTasks {
+		body = m.renderTaskPane(bodyHeight)
 	} else {
 		tree := m.renderTree(bodyHeight)
 		if m.focus == focusDetail {
@@ -949,6 +973,9 @@ func (m *Model) View() string {
 	statusLeft := m.status
 	if m.confirmQuit {
 		statusLeft = styleChanges.Render("plans still running — quit anyway? (y/N)")
+	}
+	if m.confirmKill != "" {
+		statusLeft = styleChanges.Render("kill running apply? terraform is mid-apply — risks partial state + held lock (y/N)")
 	}
 	var bottom string
 	if m.focus == focusFilter {

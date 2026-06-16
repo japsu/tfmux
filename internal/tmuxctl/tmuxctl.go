@@ -126,6 +126,22 @@ func (c *Ctl) ListWindowIDs() (map[string]bool, error) {
 	return ids, nil
 }
 
+// KillWindow closes a window by id, terminating whatever runs in it. A
+// missing window (already closed) is not an error.
+func (c *Ctl) KillWindow(windowID string) error {
+	if windowID == "" {
+		return nil
+	}
+	if _, err := c.run("kill-window", "-t", windowID); err != nil {
+		// the window may have already exited; that's fine
+		if ids, lerr := c.ListWindowIDs(); lerr == nil && !ids[windowID] {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 // AttachCmd returns the command that brings the user to the session,
 // optionally focused on a window. Inside tmux ($TMUX set) attaching would
 // nest, so switch the client instead.

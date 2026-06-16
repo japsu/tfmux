@@ -62,7 +62,8 @@ Run `tfmux` for the TUI, or `tfmux ls [--json]` for a scriptable dump.
 | `←/→` `h/l` | collapse / expand |
 | `space` | mark workspace for bulk plan |
 | `p` / `P` | plan marked-or-cursor / plan all visible |
-| `x` | cancel running job (terraform gets SIGINT, releases its state lock) |
+| `x` | cancel/kill task (queued → dropped; running → SIGINT; running apply → confirm, then kill its tmux window) |
+| `T` | task pane: all in-flight tasks; `x` cancel/kill, `X` cancel all queued |
 | `enter` | view captured plan output |
 | `A` | apply saved plan in tmux |
 | `t` | attach to the tmux session (detach with `C-b d` to return) |

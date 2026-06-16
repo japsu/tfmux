@@ -11,7 +11,8 @@ type keyMap struct {
 	Attach                key.Binding
 	View                  key.Binding
 	Discard               key.Binding
-	Cancel                key.Binding
+	Cancel, CancelAll     key.Binding
+	Tasks                 key.Binding
 	Ignore, ShowIgnored   key.Binding
 	InitUpgrade           key.Binding
 	Refresh, Rediscover   key.Binding
@@ -36,7 +37,9 @@ var keys = keyMap{
 	Attach:            key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "attach tmux")),
 	View:              key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "view log")),
 	Discard:           key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard plan")),
-	Cancel:            key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel job")),
+	Cancel:            key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel/kill task")),
+	CancelAll:         key.NewBinding(key.WithKeys("X"), key.WithHelp("X", "cancel all queued")),
+	Tasks:             key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "task pane")),
 	Ignore:            key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "toggle ignore")),
 	ShowIgnored:       key.NewBinding(key.WithKeys("Z"), key.WithHelp("Z", "show ignored")),
 	InitUpgrade:       key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "init -upgrade")),
@@ -59,7 +62,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Left, k.Right, k.Mark, k.Filter},
 		{k.Plan, k.PlanAll, k.Cancel, k.View, k.Discard},
-		{k.Apply, k.Attach, k.InitUpgrade},
+		{k.Apply, k.Attach, k.InitUpgrade, k.Tasks, k.CancelAll},
 		{k.Ignore, k.ShowIgnored, k.Refresh, k.RefreshWorkspaces, k.Rediscover},
 		{k.Help, k.Esc, k.Quit},
 	}

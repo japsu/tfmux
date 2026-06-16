@@ -60,8 +60,9 @@ func (k Kind) String() string {
 	return "?"
 }
 
-// priority orders the ready queue. Higher wins; equal priorities run FIFO.
-func (k Kind) priority() int {
+// Priority orders the ready queue (and the task pane). Higher wins; equal
+// priorities run FIFO.
+func (k Kind) Priority() int {
 	switch k {
 	case KindApply:
 		return 3
@@ -214,8 +215,8 @@ func (r *Runner) pickLocked() *task {
 			continue
 		}
 		b := r.ready[best]
-		if t.kind.priority() > b.kind.priority() ||
-			(t.kind.priority() == b.kind.priority() && t.seq < b.seq) {
+		if t.kind.Priority() > b.kind.Priority() ||
+			(t.kind.Priority() == b.kind.Priority() && t.seq < b.seq) {
 			best, bi = i, i
 		}
 	}
