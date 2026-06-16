@@ -68,7 +68,7 @@ Run `tfmux` for the TUI, or `tfmux ls [--json]` for a scriptable dump.
 | `A` | apply saved plan in tmux |
 | `d` | discard saved plan file |
 | `i` / `Z` | toggle ignore / show ignored |
-| `I` | `terraform init -upgrade` for the module |
+| `I` | `terraform init -upgrade` for the module — or every module, on a repo row |
 | `r` / `R` | refresh statuses / re-discover repos |
 | `w` | re-enumerate workspaces under the cursor (refreshes the cache) |
 | `/` | filter |
@@ -95,10 +95,11 @@ Run `tfmux` for the TUI, or `tfmux ls [--json]` for a scriptable dump.
 - **One key to "see what's happening" (`enter`).** Following a non-attachable
   task and attaching to an attachable one are the same intent, so `enter`
   unifies them: on a workspace with a live apply it attaches to that apply's
-  tmux window; otherwise it opens the plan log — and a plan streams its output
-  to a log file as it runs, so `enter` on a running plan tails it in real time
-  (auto-scrolling unless you scroll up), while a finished plan shows the
-  captured log.
+  tmux window; otherwise it opens the plan log. Every pooled task (plan, and on
+  a module row a running init/enumerate) streams its output to a log file as it
+  runs, so `enter` tails it in real time (auto-scrolling unless you scroll up);
+  a finished task shows the captured log. Useful when an enumeration stalls on
+  a throttling backend and you want to see what it's doing.
 - **`TF_WORKSPACE`, never `workspace select`** — selecting would mutate
   `.terraform/environment` shared with your shell and other jobs.
 - **Workspace lists are cached.** Enumerating workspaces hits the backend

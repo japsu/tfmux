@@ -12,6 +12,44 @@ import (
 	"github.com/japsu/tfmux/internal/state"
 )
 
+func drainInit(t *testing.T, m *Model, n int) {
+	t.Helper()
+	timeout := time.After(15 * time.Second)
+	for n > 0 {
+		select {
+		case ev := <-m.runner.Events:
+			if ev.Kind == runner.KindInit && ev.Phase.Terminal() {
+				n--
+			}
+		case <-timeout:
+			t.Fatal("timed out draining init events")
+		}
+	}
+}
+
+// I on a repo row queues init -upgrade for every module in the repo.
+func TestInitUpgradeRepoQueuesAllModules(t *testing.T) {
+	m := NewModel(config.Default(), state.New(t.TempDir()))
+	m.width, m.height = 100, 30
+	repo := &domain.Repo{Path: "/iac/repo1", Name: "repo1"}
+	m1 := &domain.Module{Repo: repo, Path: "/iac/repo1/a", RelPath: "a", TFBin: "terraform"}
+	m2 := &domain.Module{Repo: repo, Path: "/iac/repo1/b", RelPath: "b", TFBin: "terraform"}
+	repo.Modules = []*domain.Module{m1, m2}
+	m.repos = []*domain.Repo{repo}
+	m.reflow()
+	m.cursor = 0 // repo row
+
+	m.initUpgradeCurrent()
+
+	if !m.hasTask(runner.KindInit, m1.Path) || !m.hasTask(runner.KindInit, m2.Path) {
+		t.Errorf("init -upgrade not queued for every module: %v", m.tasks)
+	}
+	if !strings.Contains(m.status, "2 module") {
+		t.Errorf("status = %q", m.status)
+	}
+	drainInit(t, m, 2) // let the async jobs finish before TempDir cleanup
+}
+
 // manyWorkspaces enumerates n workspaces so the list exceeds the screen.
 func manyWorkspaces(t *testing.T, m *Model, mod *domain.Module, n int) {
 	t.Helper()

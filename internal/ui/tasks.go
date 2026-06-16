@@ -64,16 +64,19 @@ func (m *Model) updateTaskKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// viewSelectedTask runs the unified view/attach action on the selected task's
-// workspace (plans and applies). Enumerate/init have no log to show.
+// viewSelectedTask runs the unified view/attach action on the selected task:
+// attach for a live apply, otherwise follow the task's log.
 func (m *Model) viewSelectedTask() tea.Cmd {
 	tasks := m.sortedTasks()
 	if m.taskCursor < 0 || m.taskCursor >= len(tasks) {
 		return nil
 	}
 	ts := tasks[m.taskCursor]
-	if ts.kind == runner.KindPlan || ts.kind == runner.KindApply {
+	switch ts.kind {
+	case runner.KindPlan, runner.KindApply:
 		return m.viewOrAttach(ts.key)
+	case runner.KindEnumerate, runner.KindInit:
+		return m.openLog(ts.kind, ts.key)
 	}
 	return nil
 }

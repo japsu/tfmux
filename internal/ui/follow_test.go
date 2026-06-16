@@ -34,8 +34,8 @@ func TestViewFollowsRunningPlan(t *testing.T) {
 	m.cursor = 2 // workspace row
 
 	cmd := keyPress(m, "enter")
-	if m.detailFollow != key {
-		t.Fatalf("expected to follow %q, got %q", key, m.detailFollow)
+	if want := runner.TaskID(runner.KindPlan, key); m.detailFollow != want {
+		t.Fatalf("expected to follow %q, got %q", want, m.detailFollow)
 	}
 	if cmd == nil {
 		t.Fatal("expected a log-load command")
@@ -53,20 +53,45 @@ func TestViewFollowsRunningPlan(t *testing.T) {
 	}
 }
 
-// Once the plan is no longer in flight, the next read stops following.
+// Once the task is no longer in flight, the next read stops following.
 func TestFollowStopsWhenPlanDone(t *testing.T) {
 	m, mod := fixtureModel(t)
 	enumerated(t, m, mod, "prod")
 	key := mod.Path + "//prod"
-	m.detailFollow = key // following, but no plan task in flight anymore
+	id := runner.TaskID(runner.KindPlan, key)
+	m.detailFollow = id // following, but no plan task in flight anymore
 
-	_, tick := m.updatePlanLog(planLogMsg{key: key, content: "Plan: 1 to add, 0 to change, 0 to destroy."})
+	_, tick := m.updateLog(logMsg{id: id, content: "Plan: 1 to add, 0 to change, 0 to destroy."})
 
 	if m.detailFollow != "" {
 		t.Error("follow should stop once the plan task is gone")
 	}
 	if tick != nil {
 		t.Error("no further tick should be scheduled after the plan finishes")
+	}
+}
+
+// enter on a module whose enumeration is running follows the enumerate log.
+func TestViewFollowsRunningEnumerate(t *testing.T) {
+	m, mod := fixtureModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m.tasks[runner.TaskID(runner.KindEnumerate, mod.Path)] = &taskState{kind: runner.KindEnumerate, key: mod.Path, running: true}
+	path, _ := m.store.ModuleLogPath(mod.Path, "enumerate")
+	if err := os.WriteFile(path, []byte("Listing workspaces...\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.cursor = 1 // module row (repo, module)
+
+	cmd := keyPress(m, "enter")
+	if want := runner.TaskID(runner.KindEnumerate, mod.Path); m.detailFollow != want {
+		t.Fatalf("expected to follow %q, got %q", want, m.detailFollow)
+	}
+	_, tick := m.Update(cmd())
+	if !strings.Contains(m.View(), "Listing workspaces") {
+		t.Error("live enumerate log not shown")
+	}
+	if tick == nil {
+		t.Error("expected a follow tick while enumeration runs")
 	}
 }
 

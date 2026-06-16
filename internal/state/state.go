@@ -122,6 +122,16 @@ func (s *Store) PlanFilePath(modulePath, workspace string) (string, error) {
 	return filepath.Join(dir, "plan.tfplan"), nil
 }
 
+// ModuleLogPath returns the path for a module-level task log (e.g. "init",
+// "enumerate"), creating the module dir.
+func (s *Store) ModuleLogPath(modulePath, name string) (string, error) {
+	dir, err := s.ModuleDir(modulePath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, name+".log"), nil
+}
+
 func (s *Store) PlanLogPath(modulePath, workspace string) (string, error) {
 	dir, err := s.WorkspaceDir(modulePath, workspace)
 	if err != nil {

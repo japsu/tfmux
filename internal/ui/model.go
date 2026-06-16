@@ -184,18 +184,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.fingerprints[msg.modulePath] = msg.fingerprint
 		return m, nil
 
-	case planLogMsg:
-		return m.updatePlanLog(msg)
+	case logMsg:
+		return m.updateLog(msg)
 
 	case logFollowMsg:
 		// keep tailing only while the user is still viewing this live log
-		if m.detailFollow != msg.key || m.focus != focusDetail {
+		if m.detailFollow != msg.id || m.focus != focusDetail {
 			return m, nil
 		}
-		if mp, ws, ok := splitWSKey(msg.key); ok {
-			return m, loadPlanLogCmd(m.store, mp, ws)
-		}
-		return m, nil
+		return m, loadLogCmd(msg.id, msg.path)
 
 	case expiredPlansMsg:
 		if msg.n > 0 {
@@ -427,7 +424,7 @@ func (m *Model) applyDone(ev runner.Event) tea.Cmd {
 	return saveRunCmd(m.store, rec)
 }
 
-// --- plan log viewer / live follow ---
+// --- task log viewer / live follow ---
 
 // splitWSKey splits a workspace key (modulePath + "//" + workspace).
 func splitWSKey(key string) (modulePath, workspace string, ok bool) {
@@ -437,34 +434,68 @@ func splitWSKey(key string) (modulePath, workspace string, ok bool) {
 	return "", "", false
 }
 
-// updatePlanLog shows a plan log in the detail viewport. While the plan is
-// still in flight (m.detailFollow set) it tails the file: re-reads on a tick,
+// logPath resolves the on-disk log for a task kind+key.
+func (m *Model) logPath(kind runner.Kind, key string) (string, error) {
+	switch kind {
+	case runner.KindPlan:
+		mp, ws, ok := splitWSKey(key)
+		if !ok {
+			return "", fmt.Errorf("bad workspace key %q", key)
+		}
+		return m.store.PlanLogPath(mp, ws)
+	case runner.KindEnumerate:
+		return m.store.ModuleLogPath(key, "enumerate")
+	case runner.KindInit:
+		return m.store.ModuleLogPath(key, "init")
+	}
+	return "", fmt.Errorf("no log for %s", kind)
+}
+
+// openLog shows a task's log in the detail viewport, following it live while
+// the task is in flight.
+func (m *Model) openLog(kind runner.Kind, key string) tea.Cmd {
+	path, err := m.logPath(kind, key)
+	if err != nil {
+		m.status = "no log available"
+		return nil
+	}
+	id := runner.TaskID(kind, key)
+	m.detailFollow = ""
+	if m.hasTask(kind, key) {
+		m.detailFollow = id
+		m.detailKey = "" // force GotoBottom on the first follow read
+	}
+	return loadLogCmd(id, path)
+}
+
+// updateLog renders a task log in the detail viewport. While the task is still
+// in flight (m.detailFollow set) it tails the file: re-reads on a tick,
 // auto-scrolling to the bottom unless the user has scrolled up.
-func (m *Model) updatePlanLog(msg planLogMsg) (tea.Model, tea.Cmd) {
-	following := m.detailFollow == msg.key
+func (m *Model) updateLog(msg logMsg) (tea.Model, tea.Cmd) {
+	following := m.detailFollow == msg.id
 	m.focus = focusDetail
 
 	if msg.err != nil {
-		// A just-started plan may not have written its log yet — keep waiting.
+		// A just-started task may not have written its log yet — keep waiting.
 		if following {
-			if m.detailKey != msg.key {
+			if m.detailKey != msg.id {
 				m.detail.SetContent(styleDim.Render("  waiting for output…"))
-				m.detailKey = msg.key
+				m.detailKey = msg.id
 			}
-			if m.hasTask(runner.KindPlan, msg.key) {
-				return m, logFollowTick(msg.key)
+			if m.tasks[msg.id] != nil {
+				return m, logFollowTick(msg.id, msg.path)
 			}
 			m.detailFollow = ""
 			return m, nil
 		}
 		m.focus = focusTree
-		m.status = "no plan log: " + msg.err.Error()
+		m.status = "no log: " + msg.err.Error()
 		return m, nil
 	}
 
-	firstOpen := m.detailKey != msg.key
+	firstOpen := m.detailKey != msg.id
 	atBottom := m.detail.AtBottom()
-	m.detailKey = msg.key
+	m.detailKey = msg.id
 	m.detail.SetContent(colorizePlanLog(msg.content))
 
 	if !following {
@@ -474,10 +505,10 @@ func (m *Model) updatePlanLog(msg planLogMsg) (tea.Model, tea.Cmd) {
 	if firstOpen || atBottom {
 		m.detail.GotoBottom() // tail -f: stick to the end unless the user scrolled up
 	}
-	if m.hasTask(runner.KindPlan, msg.key) {
-		return m, logFollowTick(msg.key)
+	if m.tasks[msg.id] != nil {
+		return m, logFollowTick(msg.id, msg.path)
 	}
-	m.detailFollow = "" // plan finished; this was the final read
+	m.detailFollow = "" // task finished; this was the final read
 	return m, nil
 }
 
@@ -600,15 +631,11 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cancelCurrent()
 	case key.Matches(msg, keys.View):
 		if r, ok := m.currentRow(); ok {
-			switch {
-			case r.kind == rowWorkspace:
+			switch r.kind {
+			case rowWorkspace:
 				return m, m.viewOrAttach(r.ws.Key())
-			case r.kind == rowModule && r.mod.WorkspaceState == domain.WorkspacesError:
-				m.detailKey = r.mod.Path
-				m.detail.SetContent(colorizePlanLog(r.mod.WorkspaceErr))
-				m.detail.GotoTop()
-				m.focus = focusDetail
-				return m, nil
+			case rowModule:
+				return m, m.viewModule(r.mod)
 			}
 		}
 	case key.Matches(msg, keys.Discard):
@@ -624,9 +651,7 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.showIgnored = !m.showIgnored
 		m.reflow()
 	case key.Matches(msg, keys.InitUpgrade):
-		if r, ok := m.currentRow(); ok && r.mod != nil && m.runner.EnqueueInitUpgrade(r.mod) {
-			m.addTask(runner.KindInit, r.mod.Path)
-		}
+		m.initUpgradeCurrent()
 	case key.Matches(msg, keys.Refresh):
 		return m, m.refresh()
 	case key.Matches(msg, keys.RefreshWorkspaces):
@@ -724,6 +749,24 @@ func (m *Model) pageUp() {
 	m.ensureVisible()
 }
 
+// modulesUnder returns the modules a row acts on: every (non-ignored) module
+// of a repo row, or the single module of a module/workspace row.
+func (m *Model) modulesUnder(r row) []*domain.Module {
+	switch r.kind {
+	case rowRepo:
+		var mods []*domain.Module
+		for _, mod := range r.repo.Modules {
+			if !m.ignore[mod.Path] {
+				mods = append(mods, mod)
+			}
+		}
+		return mods
+	case rowModule, rowWorkspace:
+		return []*domain.Module{r.mod}
+	}
+	return nil
+}
+
 // refreshWorkspaces re-enumerates workspaces for the module(s) under the cursor,
 // overwriting the on-disk cache once each enumeration completes.
 func (m *Model) refreshWorkspaces() {
@@ -731,19 +774,8 @@ func (m *Model) refreshWorkspaces() {
 	if !ok {
 		return
 	}
-	var mods []*domain.Module
-	switch r.kind {
-	case rowRepo:
-		for _, mod := range r.repo.Modules {
-			if !m.ignore[mod.Path] {
-				mods = append(mods, mod)
-			}
-		}
-	case rowModule, rowWorkspace:
-		mods = append(mods, r.mod)
-	}
 	n := 0
-	for _, mod := range mods {
+	for _, mod := range m.modulesUnder(r) {
 		if m.runner.EnqueueEnumerate(mod) {
 			m.addTask(runner.KindEnumerate, mod.Path)
 			n++
@@ -752,6 +784,26 @@ func (m *Model) refreshWorkspaces() {
 	if n > 0 {
 		m.status = fmt.Sprintf("re-enumerating workspaces for %d module(s)…", n)
 		m.reflow()
+	}
+}
+
+// initUpgradeCurrent queues `terraform init -upgrade` for the module(s) under
+// the cursor — one module, or every module in a repo (handy when lock files
+// aren't committed, so every root needs a periodic upgrade).
+func (m *Model) initUpgradeCurrent() {
+	r, ok := m.currentRow()
+	if !ok {
+		return
+	}
+	n := 0
+	for _, mod := range m.modulesUnder(r) {
+		if m.runner.EnqueueInitUpgrade(mod) {
+			m.addTask(runner.KindInit, mod.Path)
+			n++
+		}
+	}
+	if n > 0 {
+		m.status = fmt.Sprintf("queued init -upgrade for %d module(s)", n)
 	}
 }
 
@@ -975,16 +1027,27 @@ func (m *Model) viewOrAttach(key string) tea.Cmd {
 	if win, ok := m.liveApplyWindow(key); ok {
 		return m.attachWindow(win)
 	}
-	mp, ws, ok := splitWSKey(key)
-	if !ok {
-		return nil
+	return m.openLog(runner.KindPlan, key)
+}
+
+// viewModule is the "show me what's happening" action for a module: follow a
+// running init/enumerate log, or fall back to the last enumeration error.
+func (m *Model) viewModule(mod *domain.Module) tea.Cmd {
+	switch {
+	case m.hasTask(runner.KindInit, mod.Path):
+		return m.openLog(runner.KindInit, mod.Path)
+	case m.hasTask(runner.KindEnumerate, mod.Path):
+		return m.openLog(runner.KindEnumerate, mod.Path)
+	case mod.WorkspaceState == domain.WorkspacesError:
+		m.detailFollow = ""
+		m.detailKey = "err:" + mod.Path
+		m.detail.SetContent(colorizePlanLog(mod.WorkspaceErr))
+		m.detail.GotoTop()
+		m.focus = focusDetail
+	default:
+		m.status = "nothing running for this module"
 	}
-	m.detailFollow = ""
-	if m.hasTask(runner.KindPlan, key) {
-		m.detailFollow = key
-		m.detailKey = "" // force GotoBottom on the first follow read
-	}
-	return loadPlanLogCmd(m.store, mp, ws)
+	return nil
 }
 
 func (m *Model) attachWindow(windowID string) tea.Cmd {

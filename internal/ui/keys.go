@@ -40,7 +40,7 @@ var keys = keyMap{
 	Tasks:             key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "task pane")),
 	Ignore:            key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "toggle ignore")),
 	ShowIgnored:       key.NewBinding(key.WithKeys("Z"), key.WithHelp("Z", "show ignored")),
-	InitUpgrade:       key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "init -upgrade")),
+	InitUpgrade:       key.NewBinding(key.WithKeys("I"), key.WithHelp("I", "init -upgrade (module/repo)")),
 	Refresh:           key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh status")),
 	Rediscover:        key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "re-discover")),
 	RefreshWorkspaces: key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "refresh workspaces")),

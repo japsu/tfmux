@@ -24,6 +24,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -357,8 +358,11 @@ func (r *Runner) pump() {
 // EnqueueEnumerate lists the module's workspaces (lazily initializing) and
 // caches the result. Returns false if already in flight.
 func (r *Runner) EnqueueEnumerate(m *domain.Module) bool {
-	tf := tfexec.TF{Bin: m.TFBin, Dir: m.Path}
 	return r.enqueue(KindEnumerate, m.Path, m.Path, func(ctx context.Context, _ func(Event)) Event {
+		tf := tfexec.TF{Bin: m.TFBin, Dir: m.Path, Out: r.taskLog(m.Path, "enumerate")}
+		if c, ok := tf.Out.(io.Closer); ok {
+			defer c.Close()
+		}
 		workspaces, err := tf.WorkspaceList(ctx)
 		if err != nil {
 			return Event{Err: err.Error()}
@@ -369,11 +373,28 @@ func (r *Runner) EnqueueEnumerate(m *domain.Module) bool {
 	})
 }
 
+// taskLog opens (truncating) a module-level log file for live streaming, or
+// returns nil if it can't be created (streaming is best-effort).
+func (r *Runner) taskLog(modulePath, name string) io.Writer {
+	path, err := r.store.ModuleLogPath(modulePath, name)
+	if err != nil {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return nil
+	}
+	return f
+}
+
 // EnqueueInitUpgrade runs `terraform init -upgrade` (explicit user action — it
 // mutates .terraform.lock.hcl). Returns false if already in flight.
 func (r *Runner) EnqueueInitUpgrade(m *domain.Module) bool {
-	tf := tfexec.TF{Bin: m.TFBin, Dir: m.Path}
 	return r.enqueue(KindInit, m.Path, m.Path, func(ctx context.Context, _ func(Event)) Event {
+		tf := tfexec.TF{Bin: m.TFBin, Dir: m.Path, Out: r.taskLog(m.Path, "init")}
+		if c, ok := tf.Out.(io.Closer); ok {
+			defer c.Close()
+		}
 		res, err := tf.Init(ctx, true)
 		if err != nil {
 			return Event{Err: err.Error()}

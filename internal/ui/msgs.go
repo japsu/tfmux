@@ -41,10 +41,34 @@ type fingerprintMsg struct {
 	fingerprint string
 }
 
-type planLogMsg struct {
-	key     string
+// logMsg delivers a task log's contents. id is the task id (kind:key) and path
+// is its log file, both carried so a follow tick can re-read without
+// re-resolving.
+type logMsg struct {
+	id      string
+	path    string
 	content string
 	err     error
+}
+
+// logFollowMsg ticks the live tail of an in-flight task's log.
+type logFollowMsg struct {
+	id   string
+	path string
+}
+
+func logFollowTick(id, path string) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return logFollowMsg{id: id, path: path} })
+}
+
+func loadLogCmd(id, path string) tea.Cmd {
+	return func() tea.Msg {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return logMsg{id: id, path: path, err: err}
+		}
+		return logMsg{id: id, path: path, content: string(data)}
+	}
 }
 
 type expiredPlansMsg struct{ n int }
@@ -98,28 +122,6 @@ func fingerprintCmd(m *domain.Module) tea.Cmd {
 		head, _ := gitstatus.Head(ctx, m.Repo.Path)
 		dirty, _ := gitstatus.DirtyHash(ctx, m.Repo.Path, m.RelPath)
 		return fingerprintMsg{modulePath: m.Path, fingerprint: head + "|" + dirty}
-	}
-}
-
-// logFollowMsg ticks the live tail of a running plan's log.
-type logFollowMsg struct{ key string }
-
-func logFollowTick(key string) tea.Cmd {
-	return tea.Tick(time.Second, func(time.Time) tea.Msg { return logFollowMsg{key: key} })
-}
-
-func loadPlanLogCmd(store *state.Store, modulePath, workspace string) tea.Cmd {
-	key := modulePath + "//" + workspace
-	return func() tea.Msg {
-		path, err := store.PlanLogPath(modulePath, workspace)
-		if err != nil {
-			return planLogMsg{key: key, err: err}
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return planLogMsg{key: key, err: err}
-		}
-		return planLogMsg{key: key, content: string(data)}
 	}
 }
 
