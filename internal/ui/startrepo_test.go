@@ -59,6 +59,30 @@ func TestJumpToStartRepoPositionsAtTop(t *testing.T) {
 	}
 }
 
+// The jump zooms onto the launch repo: every other repo is collapsed while the
+// launch repo stays expanded with its modules visible.
+func TestJumpToStartRepoCollapsesOthers(t *testing.T) {
+	m, repo1, repo2 := twoRepos(t)
+	m.startDir = "/iac/repo2/envs/dev"
+	m.jumpToStartRepo()
+
+	if !m.collapsed[repo1.Path] {
+		t.Error("other repos should be collapsed")
+	}
+	if m.collapsed[repo2.Path] {
+		t.Error("launch repo should stay expanded")
+	}
+	visible := false
+	for _, r := range m.rows {
+		if r.kind == rowModule && r.mod.Repo == repo2 {
+			visible = true
+		}
+	}
+	if !visible {
+		t.Error("launch repo's modules should be visible")
+	}
+}
+
 func TestJumpToStartRepoInModule(t *testing.T) {
 	m, _, repo2 := twoRepos(t)
 	m.startDir = "/iac/repo2/envs/dev" // launched from a module dir inside repo2

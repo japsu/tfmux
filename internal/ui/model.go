@@ -295,10 +295,10 @@ func (m *Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// jumpToStartRepo moves the cursor to the repo containing the directory tfmux
-// was launched from, so invoking it inside a managed repo opens the tree there.
-// Runs once, on the first discovery; a later rediscover (R) leaves the cursor
-// where the user put it.
+// jumpToStartRepo zooms the tree onto the repo containing the directory tfmux
+// was launched from: it collapses every other repo (as the user habitually
+// does by hand) and lands at the top of the viewport. Runs once, on the first
+// discovery; a later rediscover (R) leaves the tree as the user left it.
 func (m *Model) jumpToStartRepo() {
 	if m.startDir == "" {
 		return
@@ -317,6 +317,8 @@ func (m *Model) jumpToStartRepo() {
 	if best == nil {
 		return
 	}
+	m.collapseAllExcept(best)
+	m.reflow()
 	for i, r := range m.rows {
 		if r.kind == rowRepo && r.repo == best {
 			// Land with the repo at the top of the viewport, not merely on screen,
@@ -798,6 +800,21 @@ func (m *Model) currentRow() (row, bool) {
 	return m.rows[m.cursor], true
 }
 
+// collapseAllExcept folds every repo (and its modules) except keep, whose
+// modules stay expanded — zooming the tree onto one repository.
+func (m *Model) collapseAllExcept(keep *domain.Repo) {
+	m.collapsed = map[string]bool{}
+	for _, repo := range m.repos {
+		if repo == keep {
+			continue
+		}
+		m.collapsed[repo.Path] = true
+		for _, mod := range repo.Modules {
+			m.collapsed[mod.Path] = true
+		}
+	}
+}
+
 // collapseOthers collapses every other repo (and its modules), leaving the
 // cursor's repo and all its root modules expanded — zooming the tree onto the
 // repository under the cursor.
@@ -807,16 +824,7 @@ func (m *Model) collapseOthers() {
 		return
 	}
 	target := r.nodeKey()
-	m.collapsed = map[string]bool{}
-	for _, repo := range m.repos {
-		if repo == r.repo {
-			continue // leave the current repo and all its modules expanded
-		}
-		m.collapsed[repo.Path] = true
-		for _, mod := range repo.Modules {
-			m.collapsed[mod.Path] = true
-		}
-	}
+	m.collapseAllExcept(r.repo)
 	m.reflow()
 	m.focusNode(target)
 }
