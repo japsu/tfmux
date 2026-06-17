@@ -12,6 +12,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -77,6 +78,9 @@ type Model struct {
 	showIgnored bool
 	discovering bool
 
+	startDir      string // directory tfmux was launched from (for the initial jump)
+	jumpedToStart bool   // whether the one-time jump to the launch repo has run
+
 	// Cached estate totals for the title bar, refreshed in reflow (honoring
 	// ignore/showIgnored) so View doesn't rescan every frame.
 	nRepos, nModules, nWorkspaces int
@@ -132,6 +136,9 @@ func NewModel(cfg *config.Config, store *state.Store) *Model {
 func (m *Model) Init() tea.Cmd {
 	if ig, err := m.store.LoadIgnore(); err == nil {
 		m.ignore = ig
+	}
+	if wd, err := os.Getwd(); err == nil {
+		m.startDir = wd
 	}
 	return tea.Batch(
 		discoverCmd(m.cfg.Roots, false),
@@ -279,8 +286,47 @@ func (m *Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.reflow()
+	if !m.jumpedToStart {
+		m.jumpedToStart = true
+		m.jumpToStartRepo()
+	}
 	cmds = append(cmds, m.tickSpinner())
 	return m, tea.Batch(cmds...)
+}
+
+// jumpToStartRepo moves the cursor to the repo containing the directory tfmux
+// was launched from, so invoking it inside a managed repo opens the tree there.
+// Runs once, on the first discovery; a later rediscover (R) leaves the cursor
+// where the user put it.
+func (m *Model) jumpToStartRepo() {
+	if m.startDir == "" {
+		return
+	}
+	start := resolvePath(m.startDir)
+	var best *domain.Repo
+	for _, repo := range m.repos {
+		rp := resolvePath(repo.Path)
+		if start == rp || strings.HasPrefix(start, rp+string(filepath.Separator)) {
+			// On nested repos, prefer the most specific (longest) match.
+			if best == nil || len(repo.Path) > len(best.Path) {
+				best = repo
+			}
+		}
+	}
+	if best != nil {
+		m.focusNode(best.Path)
+	}
+}
+
+// resolvePath returns the symlink-resolved, cleaned absolute path, falling back
+// to a plain clean when the path can't be resolved (e.g. it no longer exists).
+// Repo paths and the launch dir are compared resolved so a symlinked root (or
+// /var vs /private/var on macOS) still matches.
+func resolvePath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
 }
 
 // applyWorkspaces sets a module's workspace list (from cache or a fresh
