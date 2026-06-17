@@ -449,7 +449,11 @@ func (m *Model) initDone(ev runner.Event) tea.Cmd {
 		m.status = "init -upgrade failed: " + firstLine(ev.Err)
 	case runner.PhaseDone:
 		m.status = "init -upgrade done"
-		if mod := m.findModule(ev.ModulePath); mod != nil && m.runner.EnqueueEnumerate(mod) {
+		// Enumerating hits the backend (slow/rate-limited), and init -upgrade
+		// doesn't change the workspace list — so only auto-enumerate when the
+		// module has no workspaces yet (e.g. its first init). Otherwise the user
+		// refreshes explicitly (w / R).
+		if mod := m.findModule(ev.ModulePath); mod != nil && len(mod.Workspaces) == 0 && m.runner.EnqueueEnumerate(mod) {
 			m.addTask(runner.KindEnumerate, mod.Path)
 		}
 	}
