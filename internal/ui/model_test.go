@@ -24,6 +24,11 @@ func fixtureModel(t *testing.T) (*Model, *domain.Module) {
 	cfg := config.Default()
 	m := NewModel(cfg, state.New(t.TempDir()))
 	m.width, m.height = 100, 30
+	// Represent a live, settled model: discovery finished and the spinner's tick
+	// loop is already running (as it would be after Init), so tickSpinner is a
+	// no-op and key handlers return their cmd unwrapped.
+	m.discovering = false
+	m.spinning = true
 
 	repo := &domain.Repo{Path: "/iac/repo1", Name: "repo1", Git: domain.GitStatus{Branch: "main"}}
 	mod := &domain.Module{Repo: repo, Path: "/iac/repo1/envs/prod", RelPath: "envs/prod", TFBin: "terraform"}

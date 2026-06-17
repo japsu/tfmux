@@ -12,6 +12,7 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -76,6 +77,10 @@ type Model struct {
 	showIgnored bool
 	discovering bool
 
+	// Cached estate totals for the title bar, refreshed in reflow (honoring
+	// ignore/showIgnored) so View doesn't rescan every frame.
+	nRepos, nModules, nWorkspaces int
+
 	focus        focusArea
 	detail       viewport.Model
 	detailKey    string
@@ -84,6 +89,7 @@ type Model struct {
 	filter       textinput.Model
 	filterText   string
 	spinner      spinner.Model
+	spinning     bool // whether the spinner's self-perpetuating tick loop is live
 	help         help.Model
 	showHelp     bool
 	confirmQuit  bool
@@ -131,26 +137,48 @@ func (m *Model) Init() tea.Cmd {
 		discoverCmd(m.cfg.Roots, false),
 		waitForEvent(m.runner.Events),
 		expirePlansCmd(m.store, m.cfg.PlanTTLDuration()),
-		m.spinner.Tick,
+		m.tickSpinner(),
 	)
+}
+
+// tickSpinner (re)starts the spinner's tick loop, but only when something is
+// animating (discovery or in-flight tasks) and a loop isn't already running.
+// It's idempotent, so any code path that creates work can call it without
+// risking duplicate, compounding tick chains.
+func (m *Model) tickSpinner() tea.Cmd {
+	if m.spinning || (!m.discovering && len(m.tasks) == 0) {
+		return nil
+	}
+	m.spinning = true
+	return m.spinner.Tick
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// Size the detail viewport now (not only in View): updateLog calls
+		// SetContent/GotoBottom before the next View, and that math needs real
+		// dimensions.
 		m.detail.Width = m.width
-		m.detail.Height = m.height - 4
+		m.detail.Height = m.bodyHeight()
 		m.ensureVisible()
 		return m, nil
 
 	case spinner.TickMsg:
+		// Let the loop go quiet when idle so an idle screen stops redrawing;
+		// it's re-armed via tickSpinner the moment new work appears.
+		if !m.discovering && len(m.tasks) == 0 {
+			m.spinning = false
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 
 	case tea.KeyMsg:
-		return m.updateKey(msg)
+		mm, cmd := m.updateKey(msg)
+		return mm, tea.Batch(cmd, m.tickSpinner())
 
 	case discoveryMsg:
 		return m.updateDiscovery(msg)
@@ -165,7 +193,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case runnerEventMsg:
 		cmd := m.updateRunnerEvent(msg.ev)
-		return m, tea.Batch(waitForEvent(m.runner.Events), cmd)
+		return m, tea.Batch(waitForEvent(m.runner.Events), cmd, m.tickSpinner())
 
 	case runsLoadedMsg:
 		for k, v := range msg.runs {
@@ -183,7 +211,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.reflow()
-		return m, nil
+		return m, m.tickSpinner()
 
 	case fingerprintMsg:
 		m.fingerprints[msg.modulePath] = msg.fingerprint
@@ -251,6 +279,7 @@ func (m *Model) updateDiscovery(msg discoveryMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.reflow()
+	cmds = append(cmds, m.tickSpinner())
 	return m, tea.Batch(cmds...)
 }
 
@@ -465,11 +494,13 @@ func (m *Model) detailTitleFor(kind runner.Kind, key string) string {
 			if mod := m.findModule(mp); mod != nil {
 				return mod.Repo.Name + " · " + mod.RelPath + " · " + ws
 			}
+			return filepath.Base(mp) + " · " + ws // module gone: avoid a long absolute path
 		}
 	case runner.KindEnumerate, runner.KindInit:
 		if mod := m.findModule(key); mod != nil {
 			return mod.Repo.Name + " · " + mod.RelPath
 		}
+		return filepath.Base(key)
 	}
 	return key
 }
@@ -752,6 +783,7 @@ func (m *Model) focusNode(nodeKey string) {
 
 func (m *Model) reflow() {
 	m.rows = m.flatten()
+	m.recountTree()
 	if m.cursor >= len(m.rows) {
 		m.cursor = len(m.rows) - 1
 	}
@@ -761,15 +793,49 @@ func (m *Model) reflow() {
 	m.ensureVisible()
 }
 
-// visibleHeight is the number of tree rows on screen, matching the bodyHeight
-// the View hands to renderTree.
-func (m *Model) visibleHeight() int {
-	h := m.height - 3
-	if h < 1 {
-		h = 1
+// recountTree refreshes the cached estate totals shown in the title bar,
+// honoring ignore/showIgnored exactly as flatten does (but ignoring filter and
+// collapse, which don't change the totals). Called from reflow so View can read
+// the counts without rescanning every frame.
+func (m *Model) recountTree() {
+	var repos, mods, wss int
+	for _, repo := range m.repos {
+		repoIgnored := m.ignore[repo.Path]
+		if repoIgnored && !m.showIgnored {
+			continue
+		}
+		repos++
+		for _, mod := range repo.Modules {
+			modIgnored := repoIgnored || m.ignore[mod.Path]
+			if modIgnored && !m.showIgnored {
+				continue
+			}
+			mods++
+			for _, ws := range mod.Workspaces {
+				if (modIgnored || m.ignore[ws.Key()]) && !m.showIgnored {
+					continue
+				}
+				wss++
+			}
+		}
 	}
-	return h
+	m.nRepos, m.nModules, m.nWorkspaces = repos, mods, wss
 }
+
+// chromeRows is the fixed vertical chrome around the body: the title bar, the
+// status bar and the help/filter line.
+const chromeRows = 3
+
+// bodyHeight is the height available to the body (tree, detail or task pane).
+func (m *Model) bodyHeight() int {
+	if h := m.height - chromeRows; h > 1 {
+		return h
+	}
+	return 1
+}
+
+// visibleHeight is the number of tree rows on screen — the same as bodyHeight.
+func (m *Model) visibleHeight() int { return m.bodyHeight() }
 
 // ensureVisible scrolls the window minimally so the cursor stays on screen.
 // Because the scroll offset is stored (not derived from the cursor), moving up
@@ -1154,38 +1220,14 @@ func (m *Model) headerContext() string {
 	case focusDetail:
 		return m.detailTitle
 	default:
-		// Mirror flatten's ignore logic: skip ignored items unless Z reveals them.
-		var repos, mods, wss int
-		for _, repo := range m.repos {
-			repoIgnored := m.ignore[repo.Path]
-			if repoIgnored && !m.showIgnored {
-				continue
-			}
-			repos++
-			for _, mod := range repo.Modules {
-				modIgnored := repoIgnored || m.ignore[mod.Path]
-				if modIgnored && !m.showIgnored {
-					continue
-				}
-				mods++
-				for _, ws := range mod.Workspaces {
-					if (modIgnored || m.ignore[ws.Key()]) && !m.showIgnored {
-						continue
-					}
-					wss++
-				}
-			}
-		}
-		return fmt.Sprintf("%d repos · %d root modules · %d workspaces", repos, mods, wss)
+		return fmt.Sprintf("%d repos · %d root modules · %d workspaces", m.nRepos, m.nModules, m.nWorkspaces)
 	}
 }
 
-func (m *Model) View() string {
-	if m.width == 0 {
-		return "loading…"
-	}
-	title := styleTitle.Render("tfmux")
-	meta := []string{}
+// renderHeader builds the title bar: the app name, the screen context, then dim
+// meta (discovery/task tallies, tmux availability).
+func (m *Model) renderHeader() string {
+	var meta []string
 	if m.discovering {
 		meta = append(meta, m.spinner.View()+" discovering")
 	}
@@ -1210,29 +1252,36 @@ func (m *Model) View() string {
 	if !m.tmuxOK {
 		meta = append(meta, styleError.Render("tmux: unavailable"))
 	}
-	parts := []string{title}
+	parts := []string{styleTitle.Render("tfmux")}
 	if ctx := m.headerContext(); ctx != "" {
 		parts = append(parts, styleHeaderCtx.Render(ctx))
 	}
 	if len(meta) > 0 {
 		parts = append(parts, styleDim.Render(strings.Join(meta, "  ")))
 	}
-	header := strings.Join(parts, "  ")
+	return strings.Join(parts, "  ")
+}
 
-	bodyHeight := m.height - 3
+func (m *Model) View() string {
+	if m.width == 0 {
+		return "loading…"
+	}
+	header := m.renderHeader()
+
+	bodyH := m.bodyHeight()
 	var body string
 	if m.showHelp {
 		body = m.help.FullHelpView(keys.FullHelp())
 	} else if m.focus == focusTasks {
-		body = m.renderTaskPane(bodyHeight)
+		body = m.renderTaskPane(bodyH)
 	} else if m.focus == focusDetail {
 		// The plan log takes the full width; the tree's cursor is hidden, so the
 		// title bar carries which plan we're reading.
 		m.detail.Width = m.width
-		m.detail.Height = bodyHeight
+		m.detail.Height = bodyH
 		body = m.detail.View()
 	} else {
-		body = m.renderTree(bodyHeight)
+		body = m.renderTree(bodyH)
 	}
 
 	statusLeft := m.status
@@ -1252,7 +1301,7 @@ func (m *Model) View() string {
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		header,
-		lipgloss.NewStyle().Height(bodyHeight).MaxHeight(bodyHeight).Render(body),
+		lipgloss.NewStyle().Height(bodyH).MaxHeight(bodyH).Render(body),
 		statusBar,
 		bottom,
 	)

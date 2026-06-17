@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
+
 	"github.com/espoon-voltti/tfmux/internal/config"
 	"github.com/espoon-voltti/tfmux/internal/domain"
 	"github.com/espoon-voltti/tfmux/internal/runner"
@@ -359,10 +361,38 @@ func TestTitleBarCountsRespectIgnores(t *testing.T) {
 		t.Errorf("ignored counts not excluded: %q", firstLine(m.View()))
 	}
 
-	// Z reveals everything → count all again
+	// Z reveals everything → count all again (the Z handler reflows)
 	m.showIgnored = true
+	m.reflow()
 	if !strings.Contains(firstLine(m.View()), "2 repos · 4 root modules · 8 workspaces") {
 		t.Errorf("Z should count everything: %q", firstLine(m.View()))
+	}
+}
+
+// The spinner's tick loop goes quiet when nothing is animating, and re-arms the
+// moment new work appears — so an idle screen stops redrawing.
+func TestSpinnerStopsWhenIdleAndRearms(t *testing.T) {
+	m, mod := fixtureModel(t)
+	m.spinning = true // pretend the loop from Init is running
+
+	// Idle (no tasks, not discovering): the tick stops itself.
+	_, cmd := m.Update(spinner.TickMsg{})
+	if m.spinning {
+		t.Error("spinner should stop ticking when idle")
+	}
+	if cmd != nil {
+		t.Error("idle tick should not schedule another tick")
+	}
+
+	// New work re-arms the loop.
+	enumerated(t, m, mod, "prod")
+	m.addTask(runner.KindPlan, mod.Path+"//prod")
+	if c := m.tickSpinner(); c == nil || !m.spinning {
+		t.Error("tickSpinner should restart the loop when work appears")
+	}
+	// ...and is idempotent while already spinning.
+	if c := m.tickSpinner(); c != nil {
+		t.Error("tickSpinner should be a no-op while already spinning")
 	}
 }
 

@@ -95,10 +95,15 @@ func gitStatusCmd(client gitstatus.Client, repoPath string) tea.Cmd {
 }
 
 // waitForEvent blocks on the runner channel; the model re-issues it after
-// every received event to keep the pump alive.
+// every received event to keep the pump alive. A closed channel returns a nil
+// message, which ends the pump (Update only re-issues on a runnerEventMsg).
 func waitForEvent(ch chan runner.Event) tea.Cmd {
 	return func() tea.Msg {
-		return runnerEventMsg{ev: <-ch}
+		ev, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return runnerEventMsg{ev: ev}
 	}
 }
 
