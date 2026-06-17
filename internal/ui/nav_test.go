@@ -369,6 +369,87 @@ func TestTitleBarCountsRespectIgnores(t *testing.T) {
 	}
 }
 
+// ←/h on a workspace jumps to its module and collapses it; pressing it again on
+// the now-collapsed module jumps to the repo and collapses that.
+func TestCollapseLeftWalksUp(t *testing.T) {
+	m, mod := fixtureModel(t)
+	enumerated(t, m, mod, "prod")
+	m.cursor = 2 // workspace row
+	if r, _ := m.currentRow(); r.kind != rowWorkspace {
+		t.Fatalf("setup: expected workspace, got %v", r.kind)
+	}
+
+	keyPress(m, "h")
+	if !m.collapsed[mod.Path] {
+		t.Error("h on a workspace should collapse its module")
+	}
+	if r, ok := m.currentRow(); !ok || r.kind != rowModule {
+		t.Fatalf("cursor should land on the module row, got %+v", r)
+	}
+
+	keyPress(m, "h")
+	if !m.collapsed[mod.Repo.Path] {
+		t.Error("h on a collapsed module should collapse its repo")
+	}
+	if r, ok := m.currentRow(); !ok || r.kind != rowRepo {
+		t.Fatalf("cursor should land on the repo row, got %+v", r)
+	}
+}
+
+// ←/h on an expanded module collapses it in place, leaving the cursor on it.
+func TestCollapseLeftOnExpandedModuleStays(t *testing.T) {
+	m, mod := fixtureModel(t)
+	enumerated(t, m, mod, "prod")
+	m.cursor = 1 // module row (expanded)
+
+	keyPress(m, "h")
+	if !m.collapsed[mod.Path] {
+		t.Error("h on an expanded module should collapse it")
+	}
+	if r, ok := m.currentRow(); !ok || r.kind != rowModule {
+		t.Errorf("cursor should stay on the module, got %+v", r)
+	}
+}
+
+// →/l on an already-expanded repo expands all its root modules.
+func TestExpandRightOnRepoExpandsModules(t *testing.T) {
+	m := twoRepoModel(t)
+	repo := m.repos[0]
+	for _, mod := range repo.Modules {
+		m.collapsed[mod.Path] = true
+	}
+	m.reflow()
+	m.cursor = 0 // repo1 row (expanded)
+	if r, _ := m.currentRow(); r.kind != rowRepo {
+		t.Fatalf("setup: expected repo, got %v", r.kind)
+	}
+
+	keyPress(m, "l")
+	for _, mod := range repo.Modules {
+		if m.collapsed[mod.Path] {
+			t.Errorf("l on an expanded repo should expand module %s", mod.RelPath)
+		}
+	}
+}
+
+// →/l on a collapsed repo reveals it without expanding its modules.
+func TestExpandRightOnCollapsedRepoRevealsModules(t *testing.T) {
+	m := twoRepoModel(t)
+	repo := m.repos[0]
+	m.collapsed[repo.Path] = true
+	m.collapsed[repo.Modules[0].Path] = true
+	m.reflow()
+	m.cursor = 0 // repo1 (collapsed)
+
+	keyPress(m, "l")
+	if m.collapsed[repo.Path] {
+		t.Error("l on a collapsed repo should expand the repo")
+	}
+	if !m.collapsed[repo.Modules[0].Path] {
+		t.Error("expanding a collapsed repo should not also expand its modules")
+	}
+}
+
 // The spinner's tick loop goes quiet when nothing is animating, and re-arms the
 // moment new work appears — so an idle screen stops redrawing.
 func TestSpinnerStopsWhenIdleAndRearms(t *testing.T) {

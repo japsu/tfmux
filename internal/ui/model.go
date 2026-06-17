@@ -652,15 +652,9 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, keys.PageDown):
 		m.pageDown()
 	case key.Matches(msg, keys.Left):
-		if r, ok := m.currentRow(); ok && r.kind != rowWorkspace {
-			m.collapsed[r.nodeKey()] = true
-			m.reflow()
-		}
+		m.collapseLeft()
 	case key.Matches(msg, keys.Right):
-		if r, ok := m.currentRow(); ok && r.kind != rowWorkspace {
-			delete(m.collapsed, r.nodeKey())
-			m.reflow()
-		}
+		m.expandRight()
 	case key.Matches(msg, keys.CollapseOthers):
 		m.collapseOthers()
 	case key.Matches(msg, keys.ExpandAll):
@@ -755,6 +749,47 @@ func (m *Model) collapseOthers() {
 	}
 	m.reflow()
 	m.focusNode(target)
+}
+
+// collapseLeft handles ←/h: walk up and fold the tree. On a workspace, jump to
+// its module and collapse it; on an already-collapsed module, jump to its repo
+// and collapse it; otherwise collapse the node in place.
+func (m *Model) collapseLeft() {
+	r, ok := m.currentRow()
+	if !ok {
+		return
+	}
+	switch {
+	case r.kind == rowWorkspace:
+		m.collapsed[r.mod.Path] = true
+		m.reflow()
+		m.focusNode(r.mod.Path)
+	case r.kind == rowModule && m.collapsed[r.mod.Path]:
+		m.collapsed[r.repo.Path] = true
+		m.reflow()
+		m.focusNode(r.repo.Path)
+	default: // expanded module or repo: collapse in place
+		m.collapsed[r.nodeKey()] = true
+		m.reflow()
+	}
+}
+
+// expandRight handles →/l: unfold the tree. On an already-expanded repo, expand
+// all its root modules too; otherwise just reveal the node's children.
+func (m *Model) expandRight() {
+	r, ok := m.currentRow()
+	if !ok || r.kind == rowWorkspace {
+		return
+	}
+	if r.kind == rowRepo && !m.collapsed[r.repo.Path] {
+		for _, mod := range r.repo.Modules {
+			delete(m.collapsed, mod.Path)
+		}
+	} else {
+		delete(m.collapsed, r.nodeKey())
+	}
+	m.reflow()
+	m.focusNode(r.nodeKey())
 }
 
 // expandAll un-collapses the whole tree, keeping the cursor on its item.
