@@ -40,7 +40,7 @@ var keys = keyMap{
 	Mark:              key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "mark")),
 	Plan:              key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "plan marked/cursor")),
 	PlanAll:           key.NewBinding(key.WithKeys("P"), key.WithHelp("P", "plan all")),
-	Apply:             key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "apply (tmux)")),
+	Apply:             key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "apply (tmux); module/repo: confirm + mass apply")),
 	View:              key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "view log / attach")),
 	Discard:           key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "discard plan")),
 	Cancel:            key.NewBinding(key.WithKeys("x"), key.WithHelp("x", "cancel/kill task")),

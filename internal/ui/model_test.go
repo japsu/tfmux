@@ -247,6 +247,81 @@ func TestApplyGuards(t *testing.T) {
 	}
 }
 
+// changedPlan records a fresh plan with outstanding changes and a plan file on
+// disk, so the workspace is applyable.
+func changedPlan(m *Model, mod *domain.Module, ws string) {
+	key := mod.Path + "//" + ws
+	m.runs[key] = &state.RunRecord{
+		ModulePath: mod.Path, Workspace: ws,
+		PlanFinished: time.Now(), PlanExitCode: tfexec.PlanChanges,
+		GitHead: "aaa", DirtyHash: "bbb",
+	}
+	m.planFiles[key] = true
+	m.fingerprints[mod.Path] = "aaa|bbb"
+}
+
+func TestMassApplyConfirmsThenSkipsIneligible(t *testing.T) {
+	m, mod := fixtureModel(t)
+	enumerated(t, m, mod, "default", "prod", "staging")
+	changedPlan(m, mod, "prod")
+	changedPlan(m, mod, "staging")
+	// "default" has no plan with changes — it must be excluded.
+
+	m.cursor = 1 // module row
+	keyPress(m, "A")
+	if len(m.confirmApply) != 2 {
+		t.Fatalf("confirmApply targets = %d, want 2 (prod, staging)", len(m.confirmApply))
+	}
+	if !strings.Contains(m.View(), "apply 2 plan(s) with changes") {
+		t.Errorf("confirmation prompt missing from view")
+	}
+	// Confirmation gates the launch: no apply task yet.
+	if countTasks(m, runner.KindApply) != 0 {
+		t.Error("mass apply should not enqueue before confirmation")
+	}
+}
+
+func TestMassApplyCanceledLeavesNothingQueued(t *testing.T) {
+	m, mod := fixtureModel(t)
+	enumerated(t, m, mod, "prod", "staging")
+	changedPlan(m, mod, "prod")
+	changedPlan(m, mod, "staging")
+
+	m.cursor = 0 // repo row
+	keyPress(m, "A")
+	if len(m.confirmApply) != 2 {
+		t.Fatalf("confirmApply targets = %d, want 2", len(m.confirmApply))
+	}
+	keyPress(m, "n")
+	if len(m.confirmApply) != 0 {
+		t.Error("n should clear the pending mass apply")
+	}
+	if countTasks(m, runner.KindApply) != 0 {
+		t.Error("canceling must not enqueue any apply")
+	}
+	if !strings.Contains(m.status, "canceled") {
+		t.Errorf("status = %q", m.status)
+	}
+}
+
+func TestMassApplyNothingEligible(t *testing.T) {
+	m, mod := fixtureModel(t)
+	enumerated(t, m, mod, "prod")
+	// prod was planned but is clean — nothing to apply.
+	m.runs[mod.Path+"//prod"] = &state.RunRecord{
+		ModulePath: mod.Path, Workspace: "prod",
+		PlanFinished: time.Now(), PlanExitCode: tfexec.PlanClean,
+	}
+	m.cursor = 1 // module row
+	keyPress(m, "A")
+	if len(m.confirmApply) != 0 {
+		t.Error("clean plans should not stage a mass apply")
+	}
+	if !strings.Contains(m.status, "nothing to apply") {
+		t.Errorf("status = %q", m.status)
+	}
+}
+
 func TestApplyDoneSuccessDiscardsPlan(t *testing.T) {
 	m, mod := fixtureModel(t)
 	enumerated(t, m, mod, "prod")

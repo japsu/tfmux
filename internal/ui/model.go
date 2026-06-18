@@ -102,6 +102,11 @@ type Model struct {
 	taskCursor  int    // selection in the task pane
 	confirmKill string // task id awaiting kill confirmation (running apply)
 
+	// confirmApply holds the applyable workspaces awaiting confirmation for a
+	// mass apply over a repo/module row (confirmApplyLabel names the scope).
+	confirmApply      []*domain.Workspace
+	confirmApplyLabel string
+
 	status string
 	width  int
 	height int
@@ -662,6 +667,17 @@ func (m *Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	if len(m.confirmApply) > 0 {
+		targets := m.confirmApply
+		m.confirmApply = nil
+		switch msg.String() {
+		case "y", "Y", "enter":
+			return m, m.enqueueApplies(targets)
+		default:
+			m.status = "mass apply canceled"
+			return m, nil
+		}
+	}
 	if m.focus == focusTasks {
 		return m, m.updateTaskKey(msg)
 	}
@@ -1221,39 +1237,115 @@ func (m *Model) refresh() tea.Cmd {
 
 // --- apply ---
 
+// applyCurrent applies under the cursor: a single workspace launches right
+// away, while a repo/module row asks for confirmation, then mass-applies every
+// contained workspace whose plan has outstanding changes.
 func (m *Model) applyCurrent() tea.Cmd {
 	r, ok := m.currentRow()
-	if !ok || r.kind != rowWorkspace {
+	if !ok {
 		return nil
 	}
 	if !m.tmuxOK {
 		m.status = "tmux not found — applies run in tmux windows. Install it: brew install tmux"
 		return nil
 	}
-	key := r.ws.Key()
+	switch r.kind {
+	case rowWorkspace:
+		return m.applyWorkspace(r.ws)
+	case rowModule, rowRepo:
+		return m.confirmMassApply(r)
+	}
+	return nil
+}
+
+// applyBlocker reports why a workspace's plan can't be applied right now, or ""
+// when it's ready: a plan with outstanding changes, an on-disk plan file, no
+// apply already in flight, and not stale.
+func (m *Model) applyBlocker(key string) string {
 	rec := m.runs[key]
 	switch {
 	case m.hasTask(runner.KindPlan, key):
-		m.status = "plan still running"
-		return nil
+		return "plan still running"
 	case rec == nil || rec.PlanExitCode != tfexec.PlanChanges:
-		m.status = "nothing to apply — run a plan with changes first"
-		return nil
+		return "nothing to apply — run a plan with changes first"
 	case !m.planFiles[key]:
-		m.status = "plan file expired or discarded — re-plan first"
-		return nil
+		return "plan file expired or discarded — re-plan first"
 	case m.hasTask(runner.KindApply, key):
-		m.status = "apply already queued/running — press enter to attach"
-		return nil
+		return "apply already queued/running — press enter to attach"
 	case m.isStale(rec):
-		m.status = "plan is STALE (module changed since plan) — re-plan, or attach and apply manually"
+		return "plan is STALE (module changed since plan) — re-plan, or attach and apply manually"
+	}
+	return ""
+}
+
+// applyWorkspace queues an apply for one workspace, reporting why if it can't.
+func (m *Model) applyWorkspace(ws *domain.Workspace) tea.Cmd {
+	key := ws.Key()
+	if reason := m.applyBlocker(key); reason != "" {
+		m.status = reason
 		return nil
 	}
 	// The runner launches the tmux window, guards the binary version, and
 	// watches the apply to completion while holding a pool slot.
-	if m.runner.EnqueueApply(r.ws, rec.TFBinVersion) {
+	if m.runner.EnqueueApply(ws, m.runs[key].TFBinVersion) {
 		m.addTask(runner.KindApply, key)
 		m.status = "apply queued"
+	}
+	return nil
+}
+
+// confirmMassApply gathers every applyable workspace under a repo/module row
+// and stages a confirmation prompt; workspaces without an outstanding-change
+// plan (or otherwise not ready) are silently skipped. Nothing is launched until
+// the user confirms (see the confirmApply branch in updateKey).
+func (m *Model) confirmMassApply(r row) tea.Cmd {
+	var targets []*domain.Workspace
+	for _, ws := range m.workspacesUnder(r) {
+		if m.ignore[ws.Key()] {
+			continue
+		}
+		if m.applyBlocker(ws.Key()) == "" {
+			targets = append(targets, ws)
+		}
+	}
+	if len(targets) == 0 {
+		m.status = "nothing to apply — no plans with outstanding changes here"
+		return nil
+	}
+	m.confirmApply = targets
+	m.confirmApplyLabel = m.scopeLabel(r)
+	return nil
+}
+
+// scopeLabel names a repo/module row for confirmation prompts.
+func (m *Model) scopeLabel(r row) string {
+	switch r.kind {
+	case rowRepo:
+		return r.repo.Name
+	case rowModule:
+		return r.repo.Name + " · " + r.mod.RelPath
+	}
+	return ""
+}
+
+// enqueueApplies launches confirmed applies, re-checking eligibility (state may
+// have shifted while the prompt was up) and skipping anything no longer ready.
+func (m *Model) enqueueApplies(targets []*domain.Workspace) tea.Cmd {
+	n := 0
+	for _, ws := range targets {
+		key := ws.Key()
+		if m.applyBlocker(key) != "" {
+			continue
+		}
+		if m.runner.EnqueueApply(ws, m.runs[key].TFBinVersion) {
+			m.addTask(runner.KindApply, key)
+			n++
+		}
+	}
+	if n > 0 {
+		m.status = fmt.Sprintf("queued %d apply(ies) in tmux", n)
+	} else {
+		m.status = "nothing to apply"
 	}
 	return nil
 }
@@ -1403,6 +1495,9 @@ func (m *Model) View() string {
 	}
 	if m.confirmKill != "" {
 		statusLeft = styleChanges.Render("kill running apply? terraform is mid-apply — risks partial state + held lock (y/N)")
+	}
+	if len(m.confirmApply) > 0 {
+		statusLeft = styleChanges.Render(fmt.Sprintf("apply %d plan(s) with changes in %s? (y/N)", len(m.confirmApply), m.confirmApplyLabel))
 	}
 	var bottom string
 	if m.focus == focusFilter {
